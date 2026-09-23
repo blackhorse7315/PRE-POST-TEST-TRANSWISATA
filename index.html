@@ -64,12 +64,21 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'transwisata-assessment-app';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const appId = 'transwisata-assessment-app';
+        
+        // Firebase Config milik Anda (probill-manager)
+        const firebaseConfig = {
+            apiKey: "AIzaSyDkUOyaPPolW5LqBIMtlXnqSKDSBOpKjuQ",
+            authDomain: "probill-manager.firebaseapp.com",
+            projectId: "probill-manager",
+            storageBucket: "probill-manager.firebasestorage.app",
+            messagingSenderId: "532141257646",
+            appId: "1:532141257646:web:7c64be0b9ac8b87d544e3f",
+            measurementId: "G-BD65MW4JHE"
+        };
 
         let app, db, auth;
         
@@ -103,11 +112,8 @@
         async function connectToDatabase() {
             if (!auth) return;
             try {
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
+                // Autentikasi anonim untuk Firebase Anda
+                await signInAnonymously(auth);
                 isDbConnected = true;
 
                 // Listen to Questions Collection (Real-time)
