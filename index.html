@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PT. Transwisata Prima Aviation - Assessment</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f1f5f9;
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        html {
+            scroll-behavior: smooth;
+        }
+    </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col">
+
+    <header class="bg-blue-900 text-white shadow-md z-10 relative">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="bg-black p-1 rounded-md flex items-center justify-center h-10">
+                    <img src="https://lh3.googleusercontent.com/d/1WNcGjsZ9_Fp54xzOl01EYRqM6-wY5Zh7" alt="Transwisata Logo" class="h-8 w-auto object-contain">
+                </div>
+                <h1 class="font-bold text-lg hidden sm:block">PT. Transwisata Prima Aviation</h1>
+                <h1 class="font-bold text-lg sm:hidden">TPA</h1>
+            </div>
+            <div id="nav-actions"></div>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main id="app-container" class="flex-grow flex items-center justify-center p-4 sm:p-6 w-full max-w-7xl mx-auto">
+        <!-- Content injected via JS -->
+    </main>
+
+    <!-- Footer -->
+    <footer class="py-4 text-center text-sm text-slate-500 bg-white shadow-inner mt-auto">
+        &copy; 2026 PT. Transwisata Prima Aviation. All rights reserved.
+    </footer>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'transwisata-assessment-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        
+        try {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+        } catch(e) {
+            console.error("Firebase initialization failed:", e);
+        }
+
+        // --- State Management ---
+        let questions = []; 
+        let examResults = []; 
+        let currentUser = null;
+        let currentView = 'login'; 
+        let userAnswers = {};
+        let editingQuestionId = null;
+        let adminTab = 'soal'; 
+        let adminResultFilter = 'All';
+        let isDbConnected = false;
+        
+        // --- Timer State ---
+        let examDuration = 60; // Default 60 minutes
+        let timerInterval = null;
+        let timeRemaining = 0;
+
+        const appContainer = document.getElementById('app-container');
+        const navActions = document.getElementById('nav-actions');
+
+        async function connectToDatabase() {
+            if (!auth) return;
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                isDbConnected = true;
+
+                // Listen to Questions Collection (Real-time)
+                const qRef = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+                onSnapshot(qRef, (snapshot) => {
+                    questions = [];
+                    snapshot.forEach((doc) => {
+                        questions.push({ dbId: doc.id, ...doc.data() });
+                    });
+                    questions.sort((a,b) => a.id - b.id);
+                    if (currentView === 'admin' || currentView === 'user') render();
+                }, (err) => console.error("Error fetching questions:", err));
+
+                // Listen to Results Collection (Real-time)
+                const rRef = collection(db, 'artifacts', appId, 'public', 'data', 'results');
+                onSnapshot(rRef, (snapshot) => {
+                    examResults = [];
+                    snapshot.forEach((doc) => {
+                        examResults.push({ dbId: doc.id, ...doc.data() });
+                    });
+                    if (currentView === 'admin' && adminTab === 'hasil') render();
+                }, (err) => console.error("Error fetching results:", err));
+
+                // Listen to Exam Settings
+                const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config');
+                onSnapshot(settingsRef, (docSnap) => {
+                    if (docSnap.exists() && docSnap.data().duration) {
+                        examDuration = docSnap.data().duration;
+                    }
+                    if (currentView === 'admin' && adminTab === 'settings') render();
+                }, (err) => console.error("Error fetching settings:", err));
+
+            } catch (error) {
+                console.error("Auth error:", error);
+            }
+        }
+
+        connectToDatabase();
+
+        function render() {
+            appContainer.innerHTML = '';
+            navActions.innerHTML = '';
+
+            switch(currentView) {
+                case 'login': renderLoginView(); break;
+                case 'welcome': 
+                    renderWelcomeView(); 
+                    renderLogoutButton(); 
+                    break;
+                case 'admin': 
+                    renderAdminView(); 
+                    renderLogoutButton(); 
+                    break;
+                case 'user': 
+                    renderUserView(); 
+                    renderLogoutButton(); 
+                    break;
+                case 'result': 
+                    renderResultView(); 
+                    renderLogoutButton(); 
+                    break;
+            }
+        }
+
+        function renderLogoutButton() {
+            navActions.innerHTML = `
+                <div class="flex items-center gap-4">
+                    <span class="text-sm text-blue-200 hidden sm:inline">Logged in as: <b class="text-white">${currentUser?.name || 'Admin'}</b></span>
+                    <button id="btn-logout" class="text-sm bg-red-600 hover:bg-red-700 text-white py-1.5 px-4 rounded-md transition duration-200 shadow-sm font-medium">
+                        Logout
+                    </button>
+                </div>
+            `;
+            document.getElementById('btn-logout').addEventListener('click', handleLogout);
+        }
+
+        function renderLoginView() {
+            const html = `
+                <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-100 fade-in">
+                    <div class="text-center mb-8">
+                        <img src="https://lh3.googleusercontent.com/d/1WNcGjsZ9_Fp54xzOl01EYRqM6-wY5Zh7" alt="Transwisata Logo" class="h-20 w-auto mx-auto mb-4 object-contain rounded-lg shadow-sm border border-slate-100">
+                        <h2 class="text-2xl font-bold text-slate-800">Assessment Portal</h2>
+                        <p class="text-slate-500 text-sm mt-1">Please enter your details</p>
+                        ${!isDbConnected ? '<p class="text-xs text-amber-500 mt-2 flex items-center justify-center gap-1"><svg class="animate-spin h-3 w-3" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Connecting to Cloud...</p>' : ''}
+                    </div>
+
+                    <form id="login-form" class="space-y-5">
+                        <div id="login-error" class="hidden bg-red-50 text-red-600 text-sm p-3 rounded-md mb-4 border border-red-200"></div>
+                        
+                        <div>
+                            <label for="name" class="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
+                            <input type="text" id="name" required class="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 outline-none transition" placeholder="Enter your full name">
+                        </div>
+                        
+                        <div>
+                            <label for="email" class="block text-sm font-medium text-slate-700 mb-1">Email Address</label>
+                            <input type="email" id="email" required class="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 outline-none transition" placeholder="example@email.com">
+                        </div>
+
+                        <div>
+                            <label for="department" class="block text-sm font-medium text-slate-700 mb-1">Department</label>
+                            <input type="text" id="department" class="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 outline-none transition" placeholder="e.g. Flight Operations">
+                        </div>
+                        
+                        <div>
+                            <label for="position" class="block text-sm font-medium text-slate-700 mb-1">Position</label>
+                            <input type="text" id="position" class="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 outline-none transition" placeholder="e.g. Flight Attendant">
+                        </div>
+                        
+                        <div>
+                            <label for="test-type" class="block text-sm font-medium text-slate-700 mb-1">Exam Category</label>
+                            <select id="test-type" class="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 outline-none transition bg-white">
+                                <option value="Pre-Test">Pre-Test</option>
+                                <option value="Post-Test">Post-Test</option>
+                            </select>
+                        </div>
+                        
+                        <button type="submit" class="w-full bg-blue-700 hover:bg-blue-800 text-white font-medium py-2.5 rounded-lg shadow-md transition duration-200 mt-2 flex justify-center items-center gap-2">
+                            Login to System
+                        </button>
+                    </form>
+                </div>
+            `;
+            
+            appContainer.innerHTML = html;
+            
+            document.getElementById('login-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const name = document.getElementById('name').value.trim();
+                const email = document.getElementById('email').value.trim();
+                const department = document.getElementById('department').value.trim();
+                const position = document.getElementById('position').value.trim();
+                const testType = document.getElementById('test-type').value;
+                
+                if (!name || !email) {
+                    showLoginError("Name and Email are required.");
+                    return;
+                }
+
+                if (name.toUpperCase() === 'ADMIN' && email === 'admin@gmail.com') {
+                    currentUser = { name: 'Administrator', role: 'admin' };
+                    currentView = 'admin';
+                } else {
+                    currentUser = { name: name, email: email, department: department, position: position, role: 'user', testType: testType };
+                    currentView = 'welcome'; // Redirect to Welcome Page first
+                    userAnswers = {}; 
+                }
+                render();
+            });
+        }
+        
+        function renderWelcomeView() {
+            const html = `
+                <div class="bg-white p-8 sm:p-12 rounded-2xl shadow-xl w-full max-w-2xl border border-slate-100 fade-in">
+                    <div class="text-center mb-8">
+                        <div class="bg-blue-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-blue-100">
+                            <svg class="w-10 h-10 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </div>
+                        <h2 class="text-3xl font-bold text-slate-800">Welcome, ${currentUser.name}!</h2>
+                        <p class="text-slate-500 mt-2 font-medium">${currentUser.department} - ${currentUser.position}</p>
+                        <span class="inline-block mt-3 px-3 py-1 rounded-full text-sm font-bold ${currentUser.testType === 'Post-Test' ? 'bg-purple-100 text-purple-700' : 'bg-indigo-100 text-indigo-700'}">${currentUser.testType} Assessment</span>
+                    </div>
+
+                    <div class="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-8">
+                        <h3 class="font-bold text-slate-800 mb-3 flex items-center gap-2">
+                            <svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            Exam Instructions
+                        </h3>
+                        <ul class="space-y-3 text-slate-600 text-sm list-disc pl-5">
+                            <li>Read each question carefully before selecting your answer.</li>
+                            <li>Choose the best answer from the given options (A, B, C, or D).</li>
+                            <li>You must answer all questions to submit the exam.</li>
+                            <li><b>Time Limit:</b> You have exactly <span class="font-bold text-red-600">${examDuration} minutes</span> to complete this assessment.</li>
+                            <li>The timer will start automatically once you click the button below. The exam will auto-submit when the time is up.</li>
+                        </ul>
+                    </div>
+
+                    <button id="btn-start-exam" class="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3.5 rounded-xl shadow-lg transition duration-200 flex items-center justify-center gap-2 text-lg">
+                        I Understand, Start Exam Now
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                    </button>
+                </div>
+            `;
+            
+            appContainer.innerHTML = html;
+            
+            document.getElementById('btn-start-exam').addEventListener('click', () => {
+                timeRemaining = examDuration * 60;
+                currentView = 'user';
+                render();
+            });
+        }
+
+        function showLoginError(msg) {
+            const errorDiv = document.getElementById('login-error');
+            errorDiv.textContent = msg;
+            errorDiv.classList.remove('hidden');
+        }
+
+        function renderAdminView() {
+            const tabsHtml = `
+                <div class="flex flex-col sm:flex-row border-b-0 sm:border-b border-slate-200 mb-6 w-full gap-3 sm:gap-4 pb-2 sm:pb-0">
+                    <button id="tab-soal" class="${adminTab === 'soal' ? 'border-blue-600 text-blue-600 bg-blue-50 sm:bg-transparent' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-slate-50 sm:bg-transparent'} px-4 py-3 sm:px-2 border-b-2 sm:border-b-2 rounded-xl sm:rounded-none font-semibold text-sm transition-colors duration-150 flex items-center justify-center sm:justify-start gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
+                        Manage Question Bank
+                    </button>
+                    <button id="tab-hasil" class="${adminTab === 'hasil' ? 'border-blue-600 text-blue-600 bg-blue-50 sm:bg-transparent' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-slate-50 sm:bg-transparent'} px-4 py-3 sm:px-2 border-b-2 sm:border-b-2 rounded-xl sm:rounded-none font-semibold text-sm transition-colors duration-150 flex items-center justify-center sm:justify-start gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                        Exam Results Ranking
+                    </button>
+                    <button id="tab-settings" class="${adminTab === 'settings' ? 'border-blue-600 text-blue-600 bg-blue-50 sm:bg-transparent' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-slate-50 sm:bg-transparent'} px-4 py-3 sm:px-2 border-b-2 sm:border-b-2 rounded-xl sm:rounded-none font-semibold text-sm transition-colors duration-150 flex items-center justify-center sm:justify-start gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                        Exam Settings
+                    </button>
+                </div>
+            `;
+
+            if (adminTab === 'soal') {
+                let questionsHtml = '';
+                
+                if (questions.length === 0) {
+                    questionsHtml = `<p class="text-slate-500 italic text-center py-6 bg-slate-50 rounded-lg">No questions yet. Fetching data from Cloud.</p>`;
+                } else {
+                    questions.forEach((q, index) => {
+                        questionsHtml += `
+                            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm mb-4 hover:shadow-md transition">
+                                <div class="flex justify-between items-start gap-4">
+                                    <div>
+                                        <h4 class="font-semibold text-slate-800 flex gap-2 items-start">
+                                            <span class="bg-blue-100 text-blue-800 w-6 h-6 rounded-full flex items-center justify-center text-xs shrink-0">${index + 1}</span>
+                                            <span>
+                                                ${q.text}
+                                                <span class="inline-block align-middle ml-2 text-[10px] font-bold px-2 py-0.5 rounded-full ${q.testType === 'Post-Test' ? 'bg-purple-100 text-purple-700' : 'bg-indigo-100 text-indigo-700'}">${q.testType || 'Pre-Test'}</span>
+                                            </span>
+                                        </h4>
+                                        <ul class="mt-3 space-y-2 ml-8 text-sm">
+                                            ${q.options.map((opt, i) => `
+                                                <li class="${i === q.correctAnswer ? 'text-emerald-600 font-medium bg-emerald-50 px-2 py-1 rounded' : 'text-slate-600 px-2 py-1'}">
+                                                    ${String.fromCharCode(65 + i)}. ${opt}
+                                                    ${i === q.correctAnswer ? ' <span class="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded ml-1">Correct Answer</span>' : ''}
+                                                </li>
+                                            `).join('')}
+                                        </ul>
+                                    </div>
+                                    <div class="flex gap-2 shrink-0">
+                                        <button onclick="editQuestion(${q.id})" class="text-amber-500 hover:text-amber-600 hover:bg-amber-50 p-2 rounded-lg transition" title="Edit Question">
+                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                                        </button>
+                                        <button onclick="deleteQuestion(${q.id})" class="text-red-500 hover:text-red-700 hover:bg-red-50 p-2 rounded-lg transition" title="Delete Question">
+                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+
+                const html = `
+                    <div class="w-full h-full flex flex-col fade-in pb-10">
+                        ${tabsHtml}
+                        <div class="w-full flex flex-col md:flex-row gap-6 items-start">
+                            <div class="w-full md:w-1/3 bg-white p-5 md:p-6 rounded-2xl shadow-md border border-slate-200 md:sticky md:top-4 md:max-h-[calc(100vh-2rem)] overflow-y-auto">
+                                
+                                <div class="mb-6 pb-4 border-b border-slate-100">
+                                    <h3 class="text-sm font-semibold text-slate-700 mb-2">Auto-Parse Question (Paste)</h3>
+                                    <textarea id="q-paste-area" rows="4" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-xs text-slate-600 font-mono" placeholder="Example:\\n\\nSafe aircraft operation depends on:\\n\\nA. Weight control\\nB. Fuel management\\n...\\nCorrect Answer: D"></textarea>
+                                    <button type="button" id="btn-parse" class="w-full bg-slate-800 hover:bg-slate-900 text-white text-sm font-medium py-1.5 rounded-lg transition duration-200 shadow mt-2">
+                                        Extract Question
+                                    </button>
+                                </div>
+
+                                <h2 id="form-title" class="text-xl font-bold text-slate-800 mb-5 flex items-center gap-2">
+                                    <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                    Create New Question
+                                </h2>
+                                <form id="add-question-form" class="space-y-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">Question</label>
+                                        <textarea id="q-text" required rows="3" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm" placeholder="Type your question here..."></textarea>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">Test Category</label>
+                                        <select id="q-test-type" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white">
+                                            <option value="Pre-Test">Pre-Test</option>
+                                            <option value="Post-Test">Post-Test</option>
+                                        </select>
+                                    </div>
+                                    <div class="space-y-2">
+                                        <label class="block text-sm font-medium text-slate-700">Answer Options</label>
+                                        <input type="text" id="q-optA" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm" placeholder="A. Option A">
+                                        <input type="text" id="q-optB" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm" placeholder="B. Option B">
+                                        <input type="text" id="q-optC" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm" placeholder="C. Option C">
+                                        <input type="text" id="q-optD" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm" placeholder="D. Option D">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">Correct Answer</label>
+                                        <select id="q-answer" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white">
+                                            <option value="0">A</option>
+                                            <option value="1">B</option>
+                                            <option value="2">C</option>
+                                            <option value="3">D</option>
+                                        </select>
+                                    </div>
+
+                                    <button type="submit" id="submit-btn" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 rounded-lg transition duration-200 shadow mt-2">
+                                        Save to Cloud
+                                    </button>
+                                    <button type="button" id="cancel-edit-btn" onclick="cancelEdit()" class="hidden w-full bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium py-2 rounded-lg transition duration-200 mt-2">
+                                        Cancel Edit
+                                    </button>
+                                </form>
+                                <div id="admin-msg" class="mt-3 text-sm text-center hidden"></div>
+                                
+                                <div class="block md:hidden mt-6 pt-4 border-t border-slate-100">
+                                    <a href="#question-list" class="w-full flex items-center justify-center gap-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium py-2.5 rounded-lg transition duration-200">
+                                        View Saved Questions 
+                                        <svg class="w-4 h-4 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+                                    </a>
+                                </div>
+                            </div>
+
+                            <div id="question-list" class="w-full md:w-2/3 scroll-mt-6">
+                                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-5 gap-3">
+                                    <h2 class="text-xl font-bold text-slate-800">Question Bank List</h2>
+                                    <span class="bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded-full self-start sm:self-auto">${questions.length} Questions saved</span>
+                                </div>
+                                <div class="space-y-4">
+                                    ${questionsHtml}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                appContainer.innerHTML = html;
+                document.getElementById('tab-soal').addEventListener('click', () => setAdminTab('soal'));
+                document.getElementById('tab-hasil').addEventListener('click', () => setAdminTab('hasil'));
+                document.getElementById('tab-settings').addEventListener('click', () => setAdminTab('settings'));
+                document.getElementById('btn-parse').addEventListener('click', parsePastedQuestion);
+
+                document.getElementById('add-question-form').addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    if (!auth.currentUser) return;
+                    
+                    const text = document.getElementById('q-text').value.trim();
+                    const optA = document.getElementById('q-optA').value.trim();
+                    const optB = document.getElementById('q-optB').value.trim();
+                    const optC = document.getElementById('q-optC').value.trim();
+                    const optD = document.getElementById('q-optD').value.trim();
+                    const answer = parseInt(document.getElementById('q-answer').value);
+                    const testType = document.getElementById('q-test-type').value;
+                    const btn = document.getElementById('submit-btn');
+
+                    if(!text || !optA || !optB || !optC || !optD) return;
+
+                    btn.textContent = "Saving...";
+                    btn.disabled = true;
+
+                    try {
+                        if (editingQuestionId !== null) {
+                            const qIndex = questions.findIndex(q => q.id === editingQuestionId);
+                            if (qIndex !== -1) {
+                                const qToEdit = questions[qIndex];
+                                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'questions', qToEdit.dbId);
+                                await updateDoc(docRef, { text: text, options: [optA, optB, optC, optD], correctAnswer: answer, testType: testType });
+                                showAdminMessage("Question successfully updated in Cloud!", "text-emerald-600");
+                            }
+                            editingQuestionId = null;
+                        } else {
+                            const newId = questions.length > 0 ? Math.max(...questions.map(q => q.id)) + 1 : 1;
+                            const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+                            await addDoc(colRef, { id: newId, text: text, options: [optA, optB, optC, optD], correctAnswer: answer, testType: testType });
+                            showAdminMessage("Question successfully added to Cloud!", "text-emerald-600");
+                        }
+                        
+                        if (editingQuestionId === null) {
+                            document.getElementById('add-question-form').reset();
+                        } else {
+                            render(); 
+                        }
+                    } catch (error) {
+                        console.error("Error saving:", error);
+                        showAdminMessage("Failed to save to database", "text-red-600");
+                    } finally {
+                        if (btn) {
+                            btn.textContent = "Save to Cloud";
+                            btn.disabled = false;
+                        }
+                    }
+                });
+                
+            } else if (adminTab === 'hasil') {
+                const filteredResults = examResults.filter(r => adminResultFilter === 'All' ? true : r.testType === adminResultFilter);
+                const sortedResults = [...filteredResults].sort((a, b) => b.score - a.score);
+                let tbody = '';
+                if(sortedResults.length === 0) {
+                    tbody = `<tr><td colspan="6" class="px-6 py-8 text-center text-sm text-slate-500 bg-slate-50 italic">No results found for this category.</td></tr>`;
+                } else {
+                    sortedResults.forEach((res, idx) => {
+                        let rankBadge = '';
+                        if (idx === 0) rankBadge = '🥇';
+                        else if (idx === 1) rankBadge = '🥈';
+                        else if (idx === 2) rankBadge = '🥉';
+                        
+                        tbody += `
+                            <tr class="hover:bg-slate-50 border-b border-slate-100 last:border-0 transition duration-150">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 text-center font-bold text-lg">${idx + 1} ${rankBadge}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-800 flex flex-col">
+                                    <span class="text-base">${res.name}</span>
+                                    <span class="text-xs font-normal text-slate-500">${res.email}</span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 flex flex-col">
+                                    <span class="font-medium">${res.position || '-'}</span>
+                                    <span class="text-xs text-slate-500">${res.department || '-'}</span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-center">
+                                    <span class="text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${res.testType === 'Post-Test' ? 'bg-purple-100 text-purple-700' : 'bg-indigo-100 text-indigo-700'}">${res.testType || 'Pre-Test'}</span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 text-center">${res.date}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-center">
+                                    <span class="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full shadow-sm ${res.passed ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-red-100 text-red-700 border border-red-200'}">${res.passed ? 'Passed' : 'Failed'}</span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-center text-lg font-black ${res.passed ? 'text-emerald-600' : 'text-red-600'}">${res.score}</td>
+                            </tr>
+                        `;
+                    });
+                }
+
+                appContainer.innerHTML = `
+                    <div class="w-full h-full flex flex-col fade-in pb-10">
+                        ${tabsHtml}
+                        <div class="bg-white p-6 rounded-2xl shadow-md border border-slate-200 w-full">
+                            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                                <div>
+                                    <h2 class="text-xl font-bold text-slate-800">Exam Results Leaderboard (Real-time)</h2>
+                                    <p class="text-sm text-slate-500 mt-1">Data automatically synced from Cloud Database.</p>
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    <select id="filter-test-type" class="text-sm border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-700 font-medium">
+                                        <option value="All" ${adminResultFilter === 'All' ? 'selected' : ''}>All Tests</option>
+                                        <option value="Pre-Test" ${adminResultFilter === 'Pre-Test' ? 'selected' : ''}>Pre-Test Only</option>
+                                        <option value="Post-Test" ${adminResultFilter === 'Post-Test' ? 'selected' : ''}>Post-Test Only</option>
+                                    </select>
+                                    <span class="bg-blue-100 text-blue-800 text-sm font-bold px-3 py-1.5 rounded-lg shadow-sm border border-blue-200">${sortedResults.length} Participants</span>
+                                </div>
+                            </div>
+                            <div class="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+                                <table class="min-w-full divide-y divide-slate-200">
+                                    <thead class="bg-slate-50">
+                                        <tr>
+                                            <th scope="col" class="px-6 py-4 text-center text-xs font-bold text-slate-600 uppercase tracking-wider">Rank</th>
+                                            <th scope="col" class="px-6 py-4 text-left text-xs font-bold text-slate-600 uppercase tracking-wider">Participant Name</th>
+                                            <th scope="col" class="px-6 py-4 text-left text-xs font-bold text-slate-600 uppercase tracking-wider">Position & Dept</th>
+                                            <th scope="col" class="px-6 py-4 text-center text-xs font-bold text-slate-600 uppercase tracking-wider">Category</th>
+                                            <th scope="col" class="px-6 py-4 text-center text-xs font-bold text-slate-600 uppercase tracking-wider">Completion Time</th>
+                                            <th scope="col" class="px-6 py-4 text-center text-xs font-bold text-slate-600 uppercase tracking-wider">Status</th>
+                                            <th scope="col" class="px-6 py-4 text-center text-xs font-bold text-slate-600 uppercase tracking-wider">Final Score</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="bg-white divide-y divide-slate-200">
+                                        ${tbody}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('tab-soal').addEventListener('click', () => setAdminTab('soal'));
+                document.getElementById('tab-hasil').addEventListener('click', () => setAdminTab('hasil'));
+                document.getElementById('tab-settings').addEventListener('click', () => setAdminTab('settings'));
+                document.getElementById('filter-test-type').addEventListener('change', (e) => {
+                    adminResultFilter = e.target.value;
+                    render();
+                });
+            } else if (adminTab === 'settings') {
+                appContainer.innerHTML = `
+                    <div class="w-full h-full flex flex-col fade-in pb-10">
+                        ${tabsHtml}
+                        <div class="bg-white p-6 sm:p-8 rounded-2xl shadow-md border border-slate-200 w-full max-w-lg mx-auto">
+                            <h2 class="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
+                                <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                General Exam Settings
+                            </h2>
+                            <form id="settings-form" class="space-y-6">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">Exam Duration (in Minutes)</label>
+                                    <input type="number" id="setting-duration" required min="1" value="${examDuration}" class="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 outline-none transition text-lg font-medium">
+                                    <p class="text-xs text-slate-500 mt-2">This timer will start automatically when a user begins the exam. The exam will be auto-submitted when the time reaches zero.</p>
+                                </div>
+                                <button type="submit" id="btn-save-settings" class="w-full bg-blue-700 hover:bg-blue-800 text-white font-medium py-3 rounded-xl shadow-md transition duration-200 flex justify-center items-center gap-2">
+                                    Save Settings to Cloud
+                                </button>
+                            </form>
+                            <div id="settings-msg" class="mt-4 text-sm text-center hidden font-medium"></div>
+                        </div>
+                    </div>
+                `;
+
+                document.getElementById('tab-soal').addEventListener('click', () => setAdminTab('soal'));
+                document.getElementById('tab-hasil').addEventListener('click', () => setAdminTab('hasil'));
+                document.getElementById('tab-settings').addEventListener('click', () => setAdminTab('settings'));
+
+                document.getElementById('settings-form').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const newDuration = parseInt(document.getElementById('setting-duration').value);
+                    const btn = document.getElementById('btn-save-settings');
+                    const msgDiv = document.getElementById('settings-msg');
+                    
+                    btn.textContent = "Saving...";
+                    btn.disabled = true;
+
+                    try {
+                        const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config');
+                        await setDoc(settingsRef, { duration: newDuration }, { merge: true });
+                        msgDiv.textContent = "Settings successfully updated!";
+                        msgDiv.className = "mt-4 text-sm text-center font-medium text-emerald-600 block fade-in";
+                    } catch (error) {
+                        console.error("Error saving settings:", error);
+                        msgDiv.textContent = "Failed to update settings.";
+                        msgDiv.className = "mt-4 text-sm text-center font-medium text-red-600 block fade-in";
+                    } finally {
+                        btn.textContent = "Save Settings to Cloud";
+                        btn.disabled = false;
+                        setTimeout(() => msgDiv.classList.add('hidden'), 3000);
+                    }
+                });
+            }
+        }
+
+        window.setAdminTab = function(tab) {
+            adminTab = tab;
+            render();
+        };
+
+        window.editQuestion = function(id) {
+            const q = questions.find(q => q.id === id);
+            if(q) {
+                document.getElementById('q-text').value = q.text;
+                document.getElementById('q-optA').value = q.options[0];
+                document.getElementById('q-optB').value = q.options[1];
+                document.getElementById('q-optC').value = q.options[2];
+                document.getElementById('q-optD').value = q.options[3];
+                document.getElementById('q-answer').value = q.correctAnswer;
+                if(document.getElementById('q-test-type')) {
+                    document.getElementById('q-test-type').value = q.testType || 'Pre-Test';
+                }
+                editingQuestionId = id;
+                
+                document.getElementById('form-title').innerHTML = `
+                    <svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                    Edit Question
+                `;
+                const btn = document.getElementById('submit-btn');
+                btn.textContent = "Update in Cloud";
+                btn.className = "w-full bg-amber-500 hover:bg-amber-600 text-white font-medium py-2 rounded-lg transition duration-200 shadow mt-2";
+                document.getElementById('cancel-edit-btn').classList.remove('hidden');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+        };
+
+        window.cancelEdit = function() {
+            editingQuestionId = null;
+            render();
+        };
+
+        window.parsePastedQuestion = function() {
+            const rawText = document.getElementById('q-paste-area').value.trim();
+            if (!rawText) return;
+            try {
+                let answerIndex = 0;
+                const answerMatch = rawText.match(/(?:Correct Answer|Jawaban Benar|Jawaban|Kunci|Answer)\s*:\s*([A-D])/i);
+                if (answerMatch) answerIndex = answerMatch[1].toUpperCase().charCodeAt(0) - 65; 
+
+                const normalizedText = rawText.replace(/\r\n/g, '\n');
+                const splitA = normalizedText.split(/\n\s*A[\.\)]\s*/i);
+                if(splitA.length < 2) throw new Error("A");
+                const questionText = splitA[0].trim();
+                
+                const remainingAfterA = splitA[1];
+                const splitB = remainingAfterA.split(/\n\s*B[\.\)]\s*/i);
+                const optA = splitB[0].trim();
+                
+                const remainingAfterB = splitB[1];
+                const splitC = remainingAfterB.split(/\n\s*C[\.\)]\s*/i);
+                const optB = splitC[0].trim();
+                
+                const remainingAfterC = splitC[1];
+                const splitD = remainingAfterC.split(/\n\s*D[\.\)]\s*/i);
+                const optC = splitD[0].trim();
+                const optD = splitD[1].split(/\n\s*(?:Correct Answer|Jawaban Benar|Jawaban|Kunci|Answer)/i)[0].trim();
+
+                document.getElementById('q-text').value = questionText;
+                document.getElementById('q-optA').value = optA;
+                document.getElementById('q-optB').value = optB;
+                document.getElementById('q-optC').value = optC;
+                document.getElementById('q-optD').value = optD;
+                document.getElementById('q-answer').value = answerIndex;
+
+                showAdminMessage("Successfully extracted! Please click Save.", "text-blue-600");
+                document.getElementById('q-paste-area').value = '';
+            } catch (e) {
+                showAdminMessage("Failed to extract. Make sure the format contains A, B, C, D.", "text-red-600");
+            }
+        };
+
+        window.deleteQuestion = async function(id) {
+            if (!auth.currentUser) return;
+            const qToDelete = questions.find(q => q.id === id);
+            if(qToDelete && qToDelete.dbId) {
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'questions', qToDelete.dbId));
+                } catch(e) { console.error("Failed to delete", e); }
+            }
+        };
+
+        function showAdminMessage(msg, colorClass) {
+            const msgDiv = document.getElementById('admin-msg');
+            msgDiv.textContent = msg;
+            msgDiv.className = `mt-3 text-sm text-center font-medium ${colorClass} block fade-in`;
+            setTimeout(() => msgDiv.classList.add('hidden'), 3000);
+        }
+
+        let isSubmitting = false;
+
+        function renderUserView() {
+            const activeQuestions = questions.filter(q => (q.testType || 'Pre-Test') === currentUser.testType);
+            isSubmitting = false;
+
+            if (activeQuestions.length === 0) {
+                appContainer.innerHTML = `
+                    <div class="bg-white p-8 rounded-2xl shadow-lg w-full max-w-lg text-center fade-in">
+                        <div class="bg-amber-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <svg class="w-8 h-8 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                        </div>
+                        <h2 class="text-xl font-bold text-slate-800 mb-2">No Questions Available</h2>
+                        <p class="text-slate-600 mb-6">Admin has not added any questions for the <b>${currentUser.testType}</b> category yet.</p>
+                        <button id="btn-back-login" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition">Go Back</button>
+                    </div>
+                `;
+                document.getElementById('btn-back-login').addEventListener('click', handleLogout);
+                return;
+            }
+
+            let examHtml = `
+                <!-- Sticky Timer Banner -->
+                <div id="exam-timer-banner" class="fixed top-[4.5rem] left-0 right-0 z-20 flex justify-center pointer-events-none fade-in">
+                    <div class="bg-blue-600 text-white px-6 py-2 rounded-b-xl shadow-lg border-b border-x border-blue-700 font-mono font-bold text-xl flex items-center gap-2 pointer-events-auto transition-colors duration-300">
+                        <svg class="w-5 h-5 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <span id="timer-display">--:--</span>
+                    </div>
+                </div>
+
+                <div class="w-full max-w-4xl bg-white p-6 sm:p-10 rounded-2xl shadow-xl border border-slate-100 fade-in my-6 mt-16">
+                    <div class="border-b border-slate-200 pb-5 mb-6 text-center sm:text-left flex flex-col sm:flex-row justify-between items-center gap-4">
+                        <div>
+                            <h2 class="text-2xl font-bold text-slate-800">New Employee Assessment <span class="text-sm align-middle ml-2 px-2.5 py-1 rounded-full ${currentUser.testType === 'Post-Test' ? 'bg-purple-100 text-purple-700' : 'bg-indigo-100 text-indigo-700'}">${currentUser.testType}</span></h2>
+                            <p class="text-slate-500 mt-1">Candidate: <span class="font-semibold text-blue-700">${currentUser.name}</span></p>
+                        </div>
+                        <div class="bg-blue-50 text-blue-800 px-4 py-2 rounded-lg font-semibold border border-blue-100">
+                            Total: ${activeQuestions.length} Questions
+                        </div>
+                    </div>
+                    <form id="exam-form" class="space-y-8">
+            `;
+
+            activeQuestions.forEach((q, index) => {
+                examHtml += `
+                    <div class="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                        <p class="font-semibold text-slate-800 mb-4 flex gap-3 text-lg">
+                            <span class="bg-blue-600 text-white w-7 h-7 rounded-full flex items-center justify-center text-sm shrink-0 shadow-sm">${index + 1}</span>
+                            <span>${q.text}</span>
+                        </p>
+                        <div class="space-y-3 ml-1 sm:ml-10">
+                `;
+                q.options.forEach((opt, i) => {
+                    const isChecked = userAnswers[q.id] === i ? 'checked' : '';
+                    examHtml += `
+                            <label class="flex items-start gap-3 p-3 rounded-lg border border-slate-200 bg-white hover:bg-blue-50 hover:border-blue-300 cursor-pointer transition-colors duration-200 shadow-sm">
+                                <input type="radio" name="q-${q.id}" value="${i}" ${isChecked} required class="mt-1 w-4 h-4 text-blue-600 bg-slate-100 border-slate-300 focus:ring-blue-500">
+                                <span class="text-slate-700 select-none"><span class="font-medium mr-2">${String.fromCharCode(65 + i)}.</span> ${opt}</span>
+                            </label>
+                    `;
+                });
+                examHtml += `</div></div>`;
+            });
+
+            examHtml += `
+                        <div class="mt-8 pt-6 border-t border-slate-200 flex justify-end">
+                            <button id="btn-submit-exam" type="submit" class="w-full sm:w-auto bg-blue-700 hover:bg-blue-800 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition duration-200 flex items-center justify-center gap-2 text-lg">
+                                Finish & Save Results
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            `;
+            
+            appContainer.innerHTML = examHtml;
+            
+            // Start Timer Logic
+            startExamTimer(activeQuestions);
+
+            document.getElementById('exam-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                submitExamData(activeQuestions, false);
+            });
+        }
+
+        function startExamTimer(activeQuestions) {
+            clearInterval(timerInterval);
+            
+            const timerDisplay = document.getElementById('timer-display');
+            const timerBanner = document.getElementById('exam-timer-banner').firstElementChild;
+            
+            function updateDisplay() {
+                const minutes = Math.floor(timeRemaining / 60);
+                const seconds = timeRemaining % 60;
+                timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                
+                // Alert colors when time is running out (less than 3 minutes)
+                if (timeRemaining <= 180) {
+                    timerBanner.classList.replace('bg-blue-600', 'bg-red-600');
+                    timerBanner.classList.replace('border-blue-700', 'border-red-700');
+                }
+            }
+
+            updateDisplay();
+            
+            timerInterval = setInterval(() => {
+                timeRemaining--;
+                updateDisplay();
+                
+                if (timeRemaining <= 0) {
+                    clearInterval(timerInterval);
+                    if (!isSubmitting) {
+                        alert("Time is up! Your answers will be submitted automatically.");
+                        submitExamData(activeQuestions, true);
+                    }
+                }
+            }, 1000);
+        }
+
+        async function submitExamData(activeQuestions, isAutoSubmit) {
+            if (!auth.currentUser || isSubmitting) return;
+            isSubmitting = true;
+            clearInterval(timerInterval); // Stop timer on submit
+            
+            let allAnswered = true;
+            
+            // Read answers directly from DOM
+            activeQuestions.forEach(q => {
+                const selected = document.querySelector(`input[name="q-${q.id}"]:checked`);
+                if (selected) {
+                    userAnswers[q.id] = parseInt(selected.value);
+                } else {
+                    allAnswered = false;
+                }
+            });
+
+            if (!allAnswered && !isAutoSubmit) {
+                alert("Please answer all questions before submitting.");
+                isSubmitting = false;
+                startExamTimer(activeQuestions); // Resume timer if they cancel
+                return;
+            }
+
+            const submitBtn = document.getElementById('btn-submit-exam');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = "Syncing with Cloud...";
+            }
+
+            let correctCount = 0;
+            activeQuestions.forEach(q => {
+                if (userAnswers[q.id] === q.correctAnswer) correctCount++;
+            });
+            const score = Math.round((correctCount / activeQuestions.length) * 100);
+            
+            const resultData = {
+                name: currentUser.name,
+                email: currentUser.email,
+                department: currentUser.department,
+                position: currentUser.position,
+                testType: currentUser.testType,
+                score: score,
+                passed: score >= 70, 
+                date: new Date().toLocaleString('en-US', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })
+            };
+            
+            try {
+                const existingResult = examResults.find(r => r.email === currentUser.email && r.testType === currentUser.testType);
+                if (existingResult && existingResult.dbId) {
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'results', existingResult.dbId);
+                    await updateDoc(docRef, resultData);
+                } else {
+                    const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'results');
+                    await addDoc(colRef, resultData);
+                }
+                currentView = 'result';
+                render();
+            } catch (error) {
+                console.error("Failed to save result:", error);
+                alert("Failed to save results to Cloud. Please ensure a stable connection.");
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = "Finish & Save Results";
+                }
+                isSubmitting = false;
+            }
+        }
+
+        function renderResultView() {
+            const activeQuestions = questions.filter(q => (q.testType || 'Pre-Test') === currentUser.testType);
+            let correctCount = 0;
+            activeQuestions.forEach(q => {
+                if (userAnswers[q.id] === q.correctAnswer) correctCount++;
+            });
+            const totalQuestions = activeQuestions.length;
+            const score = Math.round((correctCount / totalQuestions) * 100);
+            
+            const passed = score >= 70;
+            const statusColor = passed ? 'text-emerald-600' : 'text-red-600';
+            const statusBg = passed ? 'bg-emerald-50' : 'bg-red-50';
+            const statusIcon = passed 
+                ? `<svg class="w-16 h-16 text-emerald-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>`
+                : `<svg class="w-16 h-16 text-red-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>`;
+
+            const html = `
+                <div class="bg-white p-8 sm:p-12 rounded-2xl shadow-xl w-full max-w-lg text-center fade-in border border-slate-100">
+                    ${statusIcon}
+                    <h2 class="text-3xl font-bold text-slate-800 mb-2">${currentUser.testType} Results Saved</h2>
+                    <p class="text-slate-500 mb-8">Thank you <span class="font-semibold text-slate-700">${currentUser.name}</span>, your score has been synced to the central server.</p>
+                    
+                    <div class="flex justify-center items-center gap-8 mb-8">
+                        <div class="text-center">
+                            <p class="text-sm text-slate-500 uppercase tracking-wide font-medium">Your Score</p>
+                            <p class="text-5xl font-black ${statusColor} mt-1">${score}</p>
+                        </div>
+                        <div class="w-px h-16 bg-slate-200"></div>
+                        <div class="text-center">
+                            <p class="text-sm text-slate-500 uppercase tracking-wide font-medium">Status</p>
+                            <p class="text-xl font-bold ${statusColor} mt-2 bg-white px-3 py-1 rounded-lg shadow-sm border border-slate-100">${passed ? 'PASSED' : 'FAILED'}</p>
+                        </div>
+                    </div>
+
+                    <div class="${statusBg} p-4 rounded-xl mb-8 border border-slate-100">
+                        <p class="text-slate-700">Answered correctly: <span class="font-bold">${correctCount}</span> out of <span class="font-bold">${totalQuestions}</span> questions.</p>
+                    </div>
+
+                    <button id="btn-result-logout" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-medium py-3 rounded-xl transition duration-200 shadow-md">
+                        Logout & Return to Main Page
+                    </button>
+                </div>
+            `;
+            
+            appContainer.innerHTML = html;
+            document.getElementById('btn-result-logout').addEventListener('click', handleLogout);
+        }
+
+        window.handleLogout = function() {
+            clearInterval(timerInterval); // Reset timer on logout
+            currentUser = null;
+            userAnswers = {};
+            currentView = 'login';
+            render();
+        };
+
+        // Initialize UI
+        render();
+    </script>
+</body>
+</html>
