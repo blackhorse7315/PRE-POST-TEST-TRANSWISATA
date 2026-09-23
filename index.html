@@ -110,10 +110,16 @@
         const navActions = document.getElementById('nav-actions');
 
         async function connectToDatabase() {
-            if (!auth) return;
             try {
-                // Autentikasi anonim untuk Firebase Anda
-                await signInAnonymously(auth);
+                // Try anonymous auth, but do not block if it's not enabled
+                if (auth) {
+                    try {
+                        await signInAnonymously(auth);
+                    } catch (authError) {
+                        console.warn("Anonymous auth not enabled. Falling back to public database access.", authError.message);
+                    }
+                }
+                
                 isDbConnected = true;
 
                 // Listen to Questions Collection (Real-time)
@@ -147,7 +153,7 @@
                 }, (err) => console.error("Error fetching settings:", err));
 
             } catch (error) {
-                console.error("Auth error:", error);
+                console.error("Database connection error:", error);
             }
         }
 
